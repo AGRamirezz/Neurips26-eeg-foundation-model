@@ -1,0 +1,113 @@
+# ---------------------------------------------------------------------------
+# Local working context — private, not for the public repo
+# ---------------------------------------------------------------------------
+CLAUDE.md
+AI-STYLE-GUARDRAILS.md
+.claude/
+research/
+PLAN.md
+scratch/
+notes-local/
+*.local.md
+
+# ---------------------------------------------------------------------------
+# Secrets and credentials
+# ---------------------------------------------------------------------------
+.env
+.env.*
+*.key
+*.pem
+*.token
+.netrc
+kaggle.json
+credentials*.json
+secrets.*
+.huggingface/
+hf_token*
+
+# ---------------------------------------------------------------------------
+# Data, caches, and model weights — never committed
+# ---------------------------------------------------------------------------
+data/*
+!data/.gitkeep
+outputs/*
+!outputs/.gitkeep
+submissions/*
+!submissions/.gitkeep
+cache/
+caches/
+.eegdash_cache/
+checkpoints/
+weights/
+wandb/
+mlruns/
+lightning_logs/
+
+# Model and array formats
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.pkl
+*.joblib
+
+# Raw biosignal formats
+*.edf
+*.bdf
+*.fif
+*.fif.gz
+*.set
+*.fdt
+*.vhdr
+*.vmrk
+*.eeg
+*.cnt
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ytenv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# Jupyter
+# ---------------------------------------------------------------------------
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+
+# ---------------------------------------------------------------------------
+# Editors and OS
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
