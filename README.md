@@ -26,14 +26,26 @@ the official ones closely enough to avoid surprises on the leaderboard.
 ## Repository layout
 
 ```
-notebooks/     One notebook per track: data, training, evaluation, packaging
-src/           Shared code — metrics, adapters, submission scaffolding
-configs/       Training and evaluation configs
-submissions/   Packaged submissions (contents not tracked)
-data/          Local datasets and caches (not tracked)
-outputs/       Run artifacts, scores, logs (not tracked)
-docs/          Notes and writeups
+notebooks/
+  A1_acquire.ipynb    fetch a small amount of real data per track, verify it, write a manifest
+  A2_inspect.ipynb    confirm metadata and labels are usable; plot signal against target
+  A3_train.ipynb      train per track, save weights
+  A4_evaluate.ipynb   local evaluation and submission packaging
+  B1_baseline_submit.ipynb   untrained and pretrained baselines, to verify the submission path
+src/
+  tracks.py     per-track config: task, metric, expected channels and rate, references
+  acquire.py    verification checks and the on-disk manifest
+  datastore.py  inventory of what is already downloaded, and top-up planning
+  miniload.py   byte-budget record selection, spread across subjects
+  subset.py     split-aware subsetting that preserves each track's held-out axis
+  harness.py    local stand-in for the competition harness, plus the four track metrics
 ```
+
+Work runs as two independent streams: **A** builds the data path, **B** verifies the submission
+path. B does not depend on A, which matters because A is currently blocked on upstream bugs.
+
+Data lives outside the repo, in a Google Drive folder with one directory per track plus a shared
+folder for model checkpoints.
 
 ## Data and licensing
 

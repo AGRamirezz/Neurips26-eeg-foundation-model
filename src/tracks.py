@@ -32,6 +32,11 @@ class Track:
     references: dict[str, float]  # published, on the dataset named below
     reference_dataset: str
     prize: str
+    slug: str                     # folder name under the Drive root
+    expect_sfreq: float | None    # None where we have not verified it
+    expect_n_chans: int | None
+    exclude_sessions: tuple[str, ...] = ()
+    target_kind: str = ""         # what the label looks like, for inspection
     notes: str = ""
     caveats: list[str] = field(default_factory=list)
 
@@ -39,6 +44,11 @@ class Track:
 TRACKS: dict[str, Track] = {
     "1": Track(
         key="1",
+        slug="track1_image",
+        expect_sfreq=256.0,
+        expect_n_chans=32,
+        exclude_sessions=("02old",),
+        target_kind="image identity -> frozen DINOv2 embedding",
         name="EEG-to-Image",
         modality="eeg",
         task="image",
@@ -62,6 +72,11 @@ TRACKS: dict[str, Track] = {
     ),
     "2": Track(
         key="2",
+        slug="track2_bci",
+        expect_sfreq=None,
+        expect_n_chans=None,
+        exclude_sessions=(),
+        target_kind="one of three cued mental commands",
         name="BCI decoding",
         modality="eeg",
         task="motor_imagery",
@@ -85,6 +100,11 @@ TRACKS: dict[str, Track] = {
     ),
     "3": Track(
         key="3",
+        slug="track3_sleep",
+        expect_sfreq=100.0,
+        expect_n_chans=None,
+        exclude_sessions=(),
+        target_kind="seconds to first stable N2",
         name="Sleep onset",
         modality="eeg",
         task="sleep_onset",
@@ -110,6 +130,11 @@ TRACKS: dict[str, Track] = {
     ),
     "4": Track(
         key="4",
+        slug="track4_pose",
+        expect_sfreq=2000.0,
+        expect_n_chans=16,
+        exclude_sessions=(),
+        target_kind="20 joint angles, MISC channels in the same file",
         name="EMG-to-Pose",
         modality="emg",
         task="pose",
@@ -174,3 +199,42 @@ def summary(track: Track) -> str:
     for c in track.caveats:
         lines.append(f"  caveat    {c}")
     return "\n".join(lines)
+
+
+def paths(root, track: Track) -> dict:
+    """Per-track folders under the Drive root, created on demand.
+
+    `raw` holds what EEGDash fetched, `prepared` the windowed arrays, and weights
+    and submissions stay apart so a bad training run cannot overwrite something
+    already sent.
+    """
+    from pathlib import Path
+
+    base = Path(root) / track.slug
+    out = {
+        "base": base,
+        "raw": base / "raw",
+        "prepared": base / "prepared",
+        "weights": base / "weights",
+        "submissions": base / "submissions",
+        "manifest": base / "manifest.json",
+    }
+    for key, value in out.items():
+        if key != "manifest":
+            value.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def shared_paths(root) -> dict:
+    """Checkpoints and logs shared across tracks.
+
+    DINOv2 is 4.5 GB and REVE is used by three tracks, so per-track copies would
+    waste more Drive than the datasets do.
+    """
+    from pathlib import Path
+
+    base = Path(root) / "shared"
+    out = {"base": base, "hf": base / "hf", "logs": base / "logs"}
+    for value in out.values():
+        value.mkdir(parents=True, exist_ok=True)
+    return out
