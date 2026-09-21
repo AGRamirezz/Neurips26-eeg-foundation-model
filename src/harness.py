@@ -133,39 +133,48 @@ def load_solver(submission_dir: Path):
 
 @dataclass
 class ScoreReport:
-    top5: float
-    top1: float
-    chance_top5: float
-    gallery_size: int
+    """What a local run produced. `scores` holds whatever the track's metric returned."""
+
+    track: str
+    scores: dict[str, float]
     n_samples: int
     load_s: float
     inference_s: float
+    pred_shape: tuple[int, ...]
 
     def budget_fraction(self, budget_min: float = 60.0) -> float:
         return self.inference_s / (budget_min * 60.0)
 
     def __str__(self) -> str:
+        body = "  ".join(f"{k} {v:.3f}" for k, v in self.scores.items())
         return (
-            f"top5 {self.top5:.2f}%  top1 {self.top1:.2f}%  "
-            f"(chance top5 {self.chance_top5:.2f}%, gallery {self.gallery_size:,})\n"
+            f"track {self.track}  {body}\n"
+            f"pred {self.pred_shape}  n={self.n_samples}  "
             f"load {self.load_s:.1f}s  inference {self.inference_s:.1f}s "
-            f"({self.budget_fraction():.1%} of the 60 min budget)"
+            f"({self.budget_fraction():.2%} of the 60 min budget)"
         )
+
+
+def _shape_ok(got: tuple[int, ...], want: tuple[int | None, ...]) -> bool:
+    """None in `want` is a wildcard, for dims the track leaves free (e.g. time)."""
+    return len(got) == len(want) and all(w is None or g == w for g, w in zip(got, want))
 
 
 def run_local(
     submission_dir: Path,
     X: np.ndarray,
-    gallery: np.ndarray,
     truth: np.ndarray,
     meta: dict[str, Any],
+    track_key: str,
+    expected_shape: tuple[int | None, ...],
+    score_fn: Callable[[np.ndarray, np.ndarray], dict[str, float]],
     batch_size: int = 32,
     to_batch: Callable[[np.ndarray], Any] | None = None,
 ) -> ScoreReport:
-    """Ingestion plus scoring, end to end, the way the server would run it.
+    """Ingestion plus scoring, the way the server would run it, for any track.
 
-    `to_batch` converts a numpy batch into whatever `predict` expects. The real
-    harness passes torch tensors on `meta["device"]`; pass a converter to match.
+    `expected_shape` is checked per-sample with None as a wildcard, so Track 4's
+    free time dimension passes while a wrong joint count still fails.
     """
     solver = load_solver(submission_dir)
 
@@ -184,16 +193,78 @@ def run_local(
     pred = np.concatenate(chunks, axis=0)
     inference_s = time.perf_counter() - t0
 
-    expected = (len(X), meta["n_outputs"])
-    if pred.shape != expected:
-        raise ValueError(f"predict returned {pred.shape}, server expects {expected}")
+    want = (len(X),) + tuple(expected_shape)
+    if not _shape_ok(pred.shape, want):
+        raise ValueError(f"predict returned {pred.shape}, server expects {want}")
 
     return ScoreReport(
-        top5=top_k_retrieval(pred, gallery, truth, k=5),
-        top1=top_k_retrieval(pred, gallery, truth, k=1),
-        chance_top5=chance_top_k(len(gallery)),
-        gallery_size=len(gallery),
+        track=track_key,
+        scores=score_fn(pred, truth),
         n_samples=len(X),
         load_s=load_s,
         inference_s=inference_s,
+        pred_shape=pred.shape,
     )
+
+
+# --- per-track metrics -------------------------------------------------------
+# One per track, all numpy so they can be tested without a GPU. Each returns a
+# plain float in the units the leaderboard reports.
+
+def balanced_accuracy(pred: np.ndarray, truth: np.ndarray) -> float:
+    """Track 2. Mean per-class recall (%), so class imbalance cannot inflate it."""
+    classes = np.unique(truth)
+    recalls = []
+    for c in classes:
+        mask = truth == c
+        recalls.append((pred[mask] == c).mean())
+    return 100.0 * float(np.mean(recalls))
+
+
+SLEEP_BIN_EDGES = (0.0, 40.0, 90.0, 300.0, 600.0)
+
+
+def binned_mae(
+    pred: np.ndarray,
+    truth: np.ndarray,
+    bin_edges: tuple[float, ...] = SLEEP_BIN_EDGES,
+) -> float:
+    """Track 3. MAE in seconds, averaged with equal weight across time-to-onset bins.
+
+    The equal weighting is the whole point: a model that is excellent near onset and
+    poor at 300-600 s scores badly, which plain MAE would hide. Empty bins are
+    skipped rather than counted as zero.
+    """
+    errs = np.abs(np.asarray(pred, float) - np.asarray(truth, float))
+    per_bin = []
+    for lo, hi in zip(bin_edges[:-1], bin_edges[1:]):
+        mask = (truth >= lo) & (truth < hi)
+        if mask.any():
+            per_bin.append(errs[mask].mean())
+    if not per_bin:
+        raise ValueError("no targets fell inside any bin")
+    return float(np.mean(per_bin))
+
+
+RAD_TO_DEG = 57.29578
+
+
+def angular_mae_deg(pred: np.ndarray, truth: np.ndarray) -> float:
+    """Track 4. Mean absolute joint-angle error in degrees.
+
+    NeuralBench reports `test/mae` in radians; the paper and leaderboard use degrees.
+    """
+    return float(np.abs(np.asarray(pred, float) - np.asarray(truth, float)).mean() * RAD_TO_DEG)
+
+
+def score_track(track_key: str, pred: np.ndarray, truth: np.ndarray, **kw) -> float:
+    """Dispatch to the metric the given track is actually scored on."""
+    if track_key == "1":
+        return top_k_retrieval(pred, kw["gallery"], truth, k=kw.get("k", 5))
+    if track_key == "2":
+        return balanced_accuracy(pred, truth)
+    if track_key == "3":
+        return binned_mae(pred, truth, kw.get("bin_edges", SLEEP_BIN_EDGES))
+    if track_key == "4":
+        return angular_mae_deg(pred, truth)
+    raise KeyError(f"no metric for track {track_key!r}")
