@@ -241,10 +241,16 @@ def binned_mae(
     poor at 300-600 s scores badly, which plain MAE would hide. Empty bins are
     skipped rather than counted as zero.
     """
-    errs = np.abs(np.asarray(pred, float) - np.asarray(truth, float))
+    truth = np.asarray(truth, float)
+    errs = np.abs(np.asarray(pred, float) - truth)
     per_bin = []
-    for lo, hi in zip(bin_edges[:-1], bin_edges[1:]):
-        mask = (truth >= lo) & (truth < hi)
+    last = len(bin_edges) - 2
+    for i, (lo, hi) in enumerate(zip(bin_edges[:-1], bin_edges[1:])):
+        # Right-open bins, except the last which includes its upper edge. That
+        # matters more than it looks: targets are clip(onset - stop, 0, cap), so
+        # a large share sit at exactly `cap`. Excluding them drops precisely the
+        # long-horizon errors bMAE exists to penalise.
+        mask = (truth >= lo) & (truth <= hi) if i == last else (truth >= lo) & (truth < hi)
         if mask.any():
             per_bin.append(errs[mask].mean())
     if not per_bin:
