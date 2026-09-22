@@ -10,6 +10,10 @@ scratch/
 notes-local/
 *.local.md
 
+# Third-party artefacts we should not redistribute
+reve_positions.json
+*_positions.json
+
 # ---------------------------------------------------------------------------
 # Secrets and credentials
 # ---------------------------------------------------------------------------
