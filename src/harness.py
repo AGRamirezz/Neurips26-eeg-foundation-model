@@ -6,11 +6,17 @@ The server runs a submission inference-only: it imports `submission.py`, calls
 already on `meta["device"]`. Nothing in a NeuralBench training run touches any of
 that, so a model can score well locally and still fail to load on upload.
 
-This module mirrors that contract closely enough to catch the failures that
-matter: a wrong output shape, a missing weight file, a solver that cannot be
-imported, an inference pass that blows the runtime budget. Replace `CompetSolver`
-here with the real `compet_core.base_solver.CompetSolver` once the kit ships; the
-solver you write should not need to change.
+Superseded for contract testing as of 2026-09-21: the competition repo is public
+at github.com/neural-interfaces26/2026-competition, and
+
+    benchopt run tracks/<track> -d Simulated -s MyModel
+
+runs the real harness with no download. Prefer that. What stays useful here is the
+per-track metrics, which are numpy-only and need no benchopt install.
+
+Kept in sync with the published contract: the base class is
+`benchmark_utils.base_solver.CompetSolver`, and weights are read from
+`meta["submission_dir"]`.
 
 Metric and scoring are numpy-only on purpose, so they can be tested without a GPU
 or a torch install.
@@ -50,7 +56,7 @@ def make_meta(
     n_times: int,
     n_outputs: int,
     sfreq: float,
-    weights_dir: Path,
+    submission_dir: Path,
     ch_names: list[str] | None = None,
     device: str = "cpu",
 ) -> dict[str, Any]:
@@ -62,7 +68,7 @@ def make_meta(
         "sfreq": sfreq,
         "ch_names": ch_names or [f"ch{i}" for i in range(n_chans)],
         "chs_info": None,
-        "weights_dir": Path(weights_dir),
+        "submission_dir": Path(submission_dir),
         "device": device,
     }
 

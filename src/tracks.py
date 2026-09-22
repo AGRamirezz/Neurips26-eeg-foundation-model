@@ -33,6 +33,7 @@ class Track:
     reference_dataset: str
     prize: str
     slug: str                     # folder name under the Drive root
+    benchopt_track: str           # tracks/<name> in the competition repo
     expect_sfreq: float | None    # None where we have not verified it
     expect_n_chans: int | None
     exclude_sessions: tuple[str, ...] = ()
@@ -44,6 +45,7 @@ class Track:
 TRACKS: dict[str, Track] = {
     "1": Track(
         key="1",
+        benchopt_track="image_decoding",
         slug="track1_image",
         expect_sfreq=256.0,
         expect_n_chans=32,
@@ -56,7 +58,7 @@ TRACKS: dict[str, Track] = {
         metric="Top-5 retrieval accuracy (%)",
         metric_key="test/full_retrieval/top5_acc_subject-agg",
         higher_is_better=True,
-        output_shape="(B, 1536)  DINOv2-giant embedding",
+        output_shape="(B, n_outputs)  image embedding",
         smallest_dataset="xu2024alljoined",
         smallest_gb=4.4,
         eegdash_id="nm000134",           # Alljoined-1.6M; Alljoined-1 is nm000133
@@ -72,6 +74,7 @@ TRACKS: dict[str, Track] = {
     ),
     "2": Track(
         key="2",
+        benchopt_track="bci_decoding",
         slug="track2_bci",
         expect_sfreq=None,
         expect_n_chans=None,
@@ -100,6 +103,7 @@ TRACKS: dict[str, Track] = {
     ),
     "3": Track(
         key="3",
+        benchopt_track="sleep_onset",
         slug="track3_sleep",
         expect_sfreq=100.0,
         expect_n_chans=None,
@@ -112,7 +116,7 @@ TRACKS: dict[str, Track] = {
         metric="Binned MAE (seconds, lower better)",
         metric_key="test/bmae",
         higher_is_better=False,
-        output_shape="(B,)  seconds to first stable N2",
+        output_shape="(B,)  float seconds to onset; n_outputs = 1",
         smallest_dataset="kemp2000analysis",
         smallest_gb=8.0,
         eegdash_id="nm000185",           # Sleep-EDF
@@ -130,6 +134,7 @@ TRACKS: dict[str, Track] = {
     ),
     "4": Track(
         key="4",
+        benchopt_track="emg_pose",
         slug="track4_pose",
         expect_sfreq=2000.0,
         expect_n_chans=16,
@@ -142,7 +147,7 @@ TRACKS: dict[str, Track] = {
         metric="Mean angular error (degrees, lower better)",
         metric_key="test/mae",
         higher_is_better=False,
-        output_shape="(B, 20, T)  joint-angle trajectories",
+        output_shape="(B, n_joints, T)  joint angles in DEGREES",
         smallest_dataset="salter2024emg2pose",
         smallest_gb=330.0,
         eegdash_id="nm000281",           # emg2pose
@@ -155,7 +160,7 @@ TRACKS: dict[str, Track] = {
         caveats=[
             "Pass -m vemg2pose to every command including --download and --prepare; the "
             "model config widens data.duration to 5.895 s for TDS left context.",
-            "test/mae is radians. Multiply by 57.29578 for degrees.",
+            "NeuralBench test/mae is radians, but predict() must return DEGREES.",
             "Do not downsample targets to shrink the cache: scoring expects 10,000 frames.",
             "emg2pose is CC-BY-NC-SA-4.0, UmeTrack CC-BY-NC-4.0. Non-commercial.",
         ],
