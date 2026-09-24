@@ -133,3 +133,60 @@ def epochs_mb(n_epochs: int, n_chans: int, n_times: int) -> float:
 def targets_mb(n_stimuli: int, dim: int = 1536) -> float:
     """Size of the frozen image embeddings. One per unique stimulus, not per trial."""
     return n_stimuli * dim * BYTES_PER_SAMPLE / 1e6
+
+
+TRACK1_TRAIN_RUNS = tuple(f"{i:02d}" for i in range(5, 20))
+TRACK1_TEST_RUNS = tuple(f"{i:02d}" for i in range(1, 5))
+
+
+def select_run_split(
+    records: Sequence[dict[str, Any]],
+    train_runs: Iterable[str] = TRACK1_TRAIN_RUNS,
+    test_runs: Iterable[str] = TRACK1_TEST_RUNS,
+    n_subjects: int = 12,
+    runs_per_subject: int = 1,
+    exclude_sessions: Iterable[str] = ("02old",),
+    require_complete: bool = True,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split by run id, taking both sides of the split from one session per subject.
+
+    Alljoined splits its stimuli by run: runs 01-04 show the 200 fixed test images,
+    runs 05-19 show training images, and the two sets do not intersect. So the run
+    number *is* the train/test split, and a byte budget is the wrong selector here.
+
+    Both sides come from the same session on purpose. Track 1's shift is
+    cross-stimulus, so holding subject and session fixed keeps a local score about
+    images rather than about session drift. Which session each subject contributes
+    rotates with the subject index, so a one-run-per-subject selection is not
+    silently all ses-01.
+    """
+    exclude = set(exclude_sessions)
+    train_runs, test_runs = set(train_runs), set(test_runs)
+
+    by_subject_session: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for r in records:
+        if require_complete and r.get("_has_missing_files"):
+            continue
+        if r.get("session") in exclude:
+            continue
+        by_subject_session.setdefault(r["subject"], {}).setdefault(r["session"], []).append(r)
+
+    train: list[dict[str, Any]] = []
+    test: list[dict[str, Any]] = []
+    for i, subject in enumerate(sorted(by_subject_session)[:n_subjects]):
+        sessions = sorted(by_subject_session[subject])
+        # Rotate so subjects do not all contribute the same session.
+        order = sessions[i % len(sessions):] + sessions[: i % len(sessions)]
+        for session in order:
+            pool = by_subject_session[subject][session]
+            tr = sorted((r for r in pool if r["run"] in train_runs), key=lambda r: r["run"])
+            te = sorted((r for r in pool if r["run"] in test_runs), key=lambda r: r["run"])
+            if len(tr) < runs_per_subject or len(te) < runs_per_subject:
+                continue
+            # Rotate the training runs too, so subjects see different images.
+            tr = tr[i % len(tr):] + tr[: i % len(tr)]
+            train += tr[:runs_per_subject]
+            test += te[:runs_per_subject]
+            break
+
+    return train, test
