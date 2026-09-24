@@ -46,7 +46,7 @@ TRACKS: dict[str, Track] = {
     "1": Track(
         key="1",
         benchopt_track="image_decoding",
-        slug="track1_image",
+        slug="Track1",
         expect_sfreq=256.0,
         expect_n_chans=32,
         exclude_sessions=("02old",),
@@ -75,7 +75,7 @@ TRACKS: dict[str, Track] = {
     "2": Track(
         key="2",
         benchopt_track="bci_decoding",
-        slug="track2_bci",
+        slug="Track2",
         expect_sfreq=None,
         expect_n_chans=None,
         exclude_sessions=(),
@@ -104,7 +104,7 @@ TRACKS: dict[str, Track] = {
     "3": Track(
         key="3",
         benchopt_track="sleep_onset",
-        slug="track3_sleep",
+        slug="Track3",
         expect_sfreq=100.0,
         expect_n_chans=None,
         exclude_sessions=(),
@@ -135,7 +135,7 @@ TRACKS: dict[str, Track] = {
     "4": Track(
         key="4",
         benchopt_track="emg_pose",
-        slug="track4_pose",
+        slug="Track4",
         expect_sfreq=2000.0,
         expect_n_chans=16,
         exclude_sessions=(),
