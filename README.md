@@ -26,9 +26,9 @@ the official ones closely enough to avoid surprises on the leaderboard.
 ## Repository layout
 
 ```
-notebooks/
-  A1_acquire.ipynb    fetch a small amount of real data per track, verify it, write a manifest
-  T1_prepare.ipynb    track 1: pull the EEG and build the frozen image-embedding target table
+notebooks/                  track<N>_<step>_<name>, or common_ where it serves every track
+  common_acquire.ipynb      small fetch per track into Drive, verified, with a manifest
+  track1_01_prepare.ipynb   pull the EEG and build the frozen image-embedding target table
 src/
   tracks.py     per-track config: task, metric, expected channels and rate, references
   acquire.py    verification checks and the on-disk manifest
