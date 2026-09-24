@@ -30,6 +30,7 @@ notebooks/                  track<N>_<step>_<name>, or common_ where it serves e
   common_acquire.ipynb      small fetch per track into Drive, verified, with a manifest
   track1_01_prepare.ipynb   pull the EEG and build the frozen image-embedding target table
   track1_02_features.ipynb  epoch, run the frozen REVE encoder once, cache features
+  track1_03_head.ipynb      fit the 512 -> 1536 head by ridge, score it, build the zip
 src/
   tracks.py     per-track config: task, metric, expected channels and rate, references
   acquire.py    verification checks and the on-disk manifest
@@ -37,6 +38,7 @@ src/
   miniload.py   byte-budget record selection, and the run-based split track 1 needs
   subset.py     split-aware subsetting that preserves each track's held-out axis
   harness.py    local stand-in for the competition harness, plus the four track metrics
+solvers/        one submission.py per track, flat-zipped with its weights
 ```
 
 Work runs as two independent streams: **A** builds the data path, **B** verifies the submission
