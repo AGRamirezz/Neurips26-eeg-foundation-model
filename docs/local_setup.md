@@ -86,6 +86,15 @@ NeuralBench docs state; 277 MB encoder-only. `final_layer` is sized from
 from HuggingFace at construction — bundle it and set `REVE_POSITIONS_PATH` to
 `meta["submission_dir"]`, or that download repeats on every submission.
 
+**Track 1 · REVE position bank, second gotcha.** `RevePositionBank.forward` returns
+positions only for the channel names it recognises and merely *logs* the shortfall, so
+a 63-channel montage can yield 57 positions and the forward then dies with `size of
+tensor a (63) must match the size of tensor b (57)`. The bank's `mapping` dict is
+public: resolve names against it yourself, slice the input to the channels that
+resolved, and pass `pos` explicitly. Case differs between montages (`FP1` vs `Fp1`),
+so fold case before giving up on a name. Found by loading a built submission at
+63ch/1000Hz, not by reading the code.
+
 **Track 2 · EEGPT** (`braindecode/eegpt-pretrained`). The most portable of the
 four: no `n_times` dependency (the patch embedding is a conv over time only) and
 no `n_chans` dependency in the weights. Identical load behaviour at 8/200,
