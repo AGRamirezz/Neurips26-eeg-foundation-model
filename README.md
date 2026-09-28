@@ -32,6 +32,7 @@ notebooks/                  track<N>_<step>_<name>, or common_ where it serves e
   track1_02_features.ipynb  epoch, run the frozen REVE encoder once, cache features
   track1_03_head.ipynb      fit the 512 -> 1536 head by ridge, score it, build the zip
   track1_04_diagnose.ipynb  why a head is at chance: pipeline, pooling, or representation
+  track1_05_train.ipynb     ClipLoss probe on frozen features, then LoRA on QKVO
 src/
   tracks.py     per-track config: task, metric, expected channels and rate, references
   acquire.py    verification checks and the on-disk manifest
