@@ -34,6 +34,7 @@ notebooks/                  track<N>_<step>_<name>, or common_ where it serves e
   track1_04_diagnose.ipynb  why a head is at chance: pipeline, pooling, or representation
   track1_05_train.ipynb     ClipLoss probe on frozen features, then LoRA on QKVO
   track1_06_signal.ipynb    is the image signal in the raw EEG, and at what latency
+  track1_07_eegnet.ipynb    the organisers' EEGNet-CLIP recipe on the harness's own preprocessing
 src/
   tracks.py     per-track config: task, metric, expected channels and rate, references
   acquire.py    verification checks and the on-disk manifest
