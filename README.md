@@ -39,6 +39,7 @@ notebooks/                  track<N>_<step>_<name>, or common_ where it serves e
   track1_09_reve_lora.ipynb       REVE + LoRA with a per-electrode head, against EEGNet on the same data
   track3_01_prepare.ipynb   Sleep-EDF warm-up windows, targets and split, made as the harness makes them
   track3_02_eegnet.ipynb    the organisers' EEGNet sleep-onset regressor, scored by bMAE, packaged
+  track3_03_muse_prepare.ipynb  sealed-phase Muse data (nm000287): windows, seen and unseen splits
 src/
   tracks.py     per-track config: task, metric, expected channels and rate, references
   acquire.py    verification checks and the on-disk manifest
