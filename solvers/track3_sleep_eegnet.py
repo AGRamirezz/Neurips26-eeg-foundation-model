@@ -5,6 +5,7 @@ MSE on the latency divided by 600, predictions multiplied back and clamped to
 [0, 600] s. The weights come from `track3_02_eegnet.ipynb`, trained on
 Sleep-EDF windows made with the harness's own preprocessing. A zip may hold
 several copies trained from different seeds; their predictions are averaged.
+The EEGNet width (`f1`, temporal filters) is read from the config, default 8.
 
 Inputs are matched to the training electrodes by name (Fpz-Cz, Pz-Oz on the
 warm-up data): extra electrodes are ignored, missing ones are filled with zeros,
@@ -47,7 +48,7 @@ class ChannelMatchedRegressor:
         self.nets = [
             EEGNet(
                 n_chans=len(cfg["channels"]), n_outputs=1, n_times=self.n_times,
-                drop_prob=float(cfg["dropout"]),
+                drop_prob=float(cfg["dropout"]), F1=int(cfg.get("f1", 8)),
             ).to(device).eval()
             for _ in cfg.get("weight_files", ["weights.pt"])
         ]
