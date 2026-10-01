@@ -3,7 +3,8 @@
 The model and loss follow the organisers' `eegnet_reg.py` baseline: one output,
 MSE on the latency divided by 600, predictions multiplied back and clamped to
 [0, 600] s. The weights come from `track3_02_eegnet.ipynb`, trained on
-Sleep-EDF windows made with the harness's own preprocessing.
+Sleep-EDF windows made with the harness's own preprocessing. A zip may hold
+several copies trained from different seeds; their predictions are averaged.
 
 Inputs are matched to the training electrodes by name (Fpz-Cz, Pz-Oz on the
 warm-up data): extra electrodes are ignored, missing ones are filled with zeros,
@@ -43,10 +44,13 @@ class ChannelMatchedRegressor:
         self.n_times = int(cfg["n_times"])
         self.sfreq = float(cfg["sfreq"])
         self.in_sfreq = float(in_sfreq)
-        self.net = EEGNet(
-            n_chans=len(cfg["channels"]), n_outputs=1, n_times=self.n_times,
-            drop_prob=float(cfg["dropout"]),
-        ).to(device)
+        self.nets = [
+            EEGNet(
+                n_chans=len(cfg["channels"]), n_outputs=1, n_times=self.n_times,
+                drop_prob=float(cfg["dropout"]),
+            ).to(device).eval()
+            for _ in cfg.get("weight_files", ["weights.pt"])
+        ]
 
         lookup = {name.casefold(): i for i, name in enumerate(in_names)}
         self.src = [lookup.get(name.casefold(), -1) for name in cfg["channels"]]
@@ -63,7 +67,6 @@ class ChannelMatchedRegressor:
 
     @torch.no_grad()
     def predict(self, X):
-        self.net.eval()
         X = torch.as_tensor(X, dtype=torch.float32).to(self.device)
         out = torch.zeros(X.shape[0], len(self.src), X.shape[-1], device=self.device)
         for dst, src in enumerate(self.src):
@@ -79,7 +82,9 @@ class ChannelMatchedRegressor:
             out = out[..., : self.n_times]
         elif out.shape[-1] < self.n_times:
             out = F.pad(out, (0, self.n_times - out.shape[-1]))
-        return (self.net(out).squeeze(-1) * self.cap).clamp(0.0, self.cap)
+        preds = [(net(out).squeeze(-1) * self.cap).clamp(0.0, self.cap)
+                 for net in self.nets]
+        return torch.stack(preds).mean(0)
 
 
 class Solver(CompetSolver):
@@ -93,8 +98,9 @@ class Solver(CompetSolver):
         cfg = json.loads((sub / "sleep_eegnet_config.json").read_text())
         in_names = meta.get("ch_names") or [c["ch_name"] for c in meta["chs_info"]]
         model = ChannelMatchedRegressor(cfg, in_names, meta["sfreq"], meta["device"])
-        state = torch.load(
-            sub / "weights.pt", map_location=meta["device"], weights_only=True
-        )
-        model.net.load_state_dict(state)
+        for net, name in zip(model.nets, cfg.get("weight_files", ["weights.pt"])):
+            state = torch.load(
+                sub / name, map_location=meta["device"], weights_only=True
+            )
+            net.load_state_dict(state)
         return model
