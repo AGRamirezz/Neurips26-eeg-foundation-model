@@ -37,6 +37,8 @@ notebooks/                  track<N>_<step>_<name>, or common_ where it serves e
   track1_07_eegnet.ipynb    the organisers' EEGNet-CLIP recipe on the harness's own preprocessing
   track1_08_things_prepare.ipynb  warm-up corpus (THINGS-EEG2): one session per person, small on Drive
   track1_09_reve_lora.ipynb       REVE + LoRA with a per-electrode head, against EEGNet on the same data
+  track2_01_prepare.ipynb   Dreyer 2023 warm-up windows and labels via MOABB, made as the harness makes them
+  track2_02_eegnet.ipynb    the organisers' EEGNet motor-imagery classifier, scored by balanced accuracy, packaged
   track3_01_prepare.ipynb   Sleep-EDF warm-up windows, targets and split, made as the harness makes them
   track3_02_eegnet.ipynb    the organisers' EEGNet sleep-onset regressor, scored by bMAE, packaged
   track3_03_muse_prepare.ipynb  sealed-phase Muse data (nm000287): windows, seen and unseen splits
