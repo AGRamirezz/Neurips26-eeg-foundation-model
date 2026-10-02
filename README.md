@@ -42,6 +42,7 @@ notebooks/                  track<N>_<step>_<name>, or common_ where it serves e
   track3_01_prepare.ipynb   Sleep-EDF warm-up windows, targets and split, made as the harness makes them
   track3_02_eegnet.ipynb    the organisers' EEGNet sleep-onset regressor, scored by bMAE, packaged
   track3_03_muse_prepare.ipynb  sealed-phase Muse data (nm000287): windows, seen and unseen splits
+  track4_01_prepare.ipynb   emg2pose warm-up: a balanced 2.5 GB sample across people, movements and hands
 src/
   tracks.py     per-track config: task, metric, expected channels and rate, references
   acquire.py    verification checks and the on-disk manifest
