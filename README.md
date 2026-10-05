@@ -44,6 +44,7 @@ notebooks/                  track<N>_<step>_<name>, or common_ where it serves e
   track3_03_muse_prepare.ipynb  sealed-phase Muse data (nm000287): windows, seen and unseen splits
   track4_01_prepare.ipynb   emg2pose warm-up: a balanced 2.5 GB sample across people, movements and hands
   track4_02_eegnet.ipynb    the organisers' EEGNet pose regressor with L1 loss and band rotation, packaged
+  track4_03_vemg2pose.ipynb Meta's pretrained VEMG2Pose: zero-shot score, fine-tune, package the better
 src/
   tracks.py     per-track config: task, metric, expected channels and rate, references
   acquire.py    verification checks and the on-disk manifest
