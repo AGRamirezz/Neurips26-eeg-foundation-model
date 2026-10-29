@@ -1,15 +1,22 @@
-"""Track 02 submission: EEGNet classifying cued motor imagery.
+"""Track 02 submission: EEGNet classifying cued mental commands.
 
 The model follows the organisers' `eegnet.py` baseline (braindecode EEGNet,
 cross-entropy). The weights come from `track2_02_eegnet.ipynb`, trained on
-Dreyer 2023 windows made with the harness's own preprocessing. A zip may hold
-several copies trained from different seeds; their class probabilities are
-averaged before the argmax.
+PROTEUS (NEMAR nm000290) windows made with the harness's own preprocessing.
+A zip may hold several copies trained from different seeds; their class
+probabilities are averaged before the argmax.
+
+The streaming contract (warm-up and sealed): windows reach `predict` one at a
+time (`B = 1`) in chronological order within each participant x session, and
+each session runs on a fresh `copy.deepcopy` of this model after calling its
+optional `reset_state()`. `reset_state` clears the optional running
+per-channel mean/variance kept by the per-window standardizer, which is the
+only state this submission keeps.
 
 Inputs are matched to the training electrodes by name: extra electrodes are
 ignored, missing ones are filled with zeros, and it raises if none match. The
-class count is fixed by training (two on the warm-up), so it also raises if the
-harness asks for a different number of classes.
+class count is fixed by training (three on the warm-up), so it also raises if
+the harness asks for a different number of classes.
 """
 
 import json
@@ -64,6 +71,23 @@ class ChannelMatchedClassifier:
             raise RuntimeError(
                 f"no training channel found in the input: {list(in_names)[:8]}"
             )
+        # Running per-channel mean/variance over the current session, reset by
+        # reset_state(). Only set when the harness reports a channel count we
+        # can standardize (it always does: meta["n_chans"]).
+        self.adapt_mean = None
+        self.adapt_var = None
+        self.adapt_count = 0
+
+    def reset_state(self):
+        self.adapt_mean = None
+        self.adapt_var = None
+        self.adapt_count = 0
+
+    def _standardize(self, x):
+        # Per-window per-channel standardization, the training-time pipeline.
+        mean = x.mean(dim=-1, keepdim=True)
+        var = x.var(dim=-1, keepdim=True, unbiased=False)
+        return (x - mean) / torch.sqrt(var + 1e-8)
 
     @torch.no_grad()
     def predict(self, X):
@@ -82,6 +106,7 @@ class ChannelMatchedClassifier:
             out = out[..., : self.n_times]
         elif out.shape[-1] < self.n_times:
             out = F.pad(out, (0, self.n_times - out.shape[-1]))
+        out = self._standardize(out)
         probs = torch.stack([net(out).softmax(-1) for net in self.nets]).mean(0)
         return probs.argmax(-1)
 

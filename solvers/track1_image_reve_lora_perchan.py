@@ -2,9 +2,13 @@
 
 The encoder is `brain-bzh/reve-base`. Its pretrained weights are frozen; LoRA learns a
 small rank-r correction beside each of the 44 attention projections
-(`transformer.layers.*.0.{to_qkv,to_out}`), so no pretrained weight is overwritten.
+(`transformer.layers.*.0.{to_qkv,to_out}`) and, when `ffn_rank` is set, beside the two
+feed-forward matrices in each block (`transformer.layers.*.1.net.{1,3}`), so no
+pretrained weight is overwritten.
 
-The head gives every electrode its own weights. Averaging electrodes together, or
+The head gives every electrode its own weights (the default, `head_kind="perelec"`), or
+pools the channel tokens with K learned queries (`head_kind="mqpool"`), which keeps a
+fixed K x embed_dim bottleneck at any channel count. Averaging electrodes together, or
 applying one shared map to each, both lost the signal on this task, and each electrode
 needing its own mapping was the consistent finding. Each electrode's 512-d token is
 shrunk to a few numbers by one shared layer, then a final layer with separate weights
@@ -37,6 +41,9 @@ REVE_SFREQ = 200.0     # REVE's pretraining rate
 PATCH = 200            # REVE's patch_size in samples
 CLIP_SD = 15.0
 LORA_TARGETS = ("to_qkv", "to_out")
+# FeedForward.net is Sequential(RMSNorm, Linear, GEGLU, Linear), so its two weight
+# matrices sit at net.1 and net.3 (net.0 is the norm, net.2 the activation).
+FFN_TARGETS = (".net.1", ".net.3")
 
 
 def resample_fft(x, n_out):
@@ -87,10 +94,33 @@ class PerElectrodeHead(nn.Module):
         return self.out(z.flatten(1))
 
 
+class MQPoolHead(nn.Module):
+    """K learned queries, each pooling the channel tokens by a content-weighted
+    average (divide: one mixture per query; conquer: concat; aggregate: linear).
+    The bottleneck is K * embed_dim regardless of channel count, so a 32-channel
+    input flows through the same head as a 63-channel one."""
+
+    def __init__(self, k, embed_dim, n_outputs, dropout):
+        super().__init__()
+        self.k = k
+        self.queries = nn.Parameter(torch.randn(k, embed_dim) / embed_dim ** 0.5)
+        self.norm = nn.LayerNorm(embed_dim)
+        self.drop = nn.Dropout(dropout)
+        self.out = nn.Linear(k * embed_dim, n_outputs)
+
+    def forward(self, tokens):                    # (B, chan, embed)
+        z = self.norm(tokens)
+        w = torch.einsum('ke,bce->bkc', self.queries, z) / self.queries.shape[-1] ** 0.5
+        w = w.softmax(dim=-1)                     # (B, K, chan), from this window's content
+        pooled = torch.einsum('bkc,bce->bke', w, z)
+        return self.out(self.drop(F.gelu(pooled.flatten(1))))
+
+
 class RevePerChannel(nn.Module):
 
     def __init__(self, channels, n_outputs, in_sfreq, rank=8, alpha=16, shrink=32,
-                 dropout=0.3, encoder_state=None):
+                 dropout=0.3, encoder_state=None, ffn_rank=0, ffn_alpha=0,
+                 head_kind="perelec", mq_k=2):
         super().__init__()
         self.in_sfreq = float(in_sfreq)
         self.net = REVE(
@@ -111,6 +141,18 @@ class RevePerChannel(nn.Module):
             setattr(parent, name.split(".")[-1],
                     LoRALinear(self.net.get_submodule(name), rank, alpha))
         self.n_lora = len(names)
+        self.n_ffn = 0
+        if ffn_rank:                    # the feed-forward matrices, two per block
+            ffn_names = [
+                n for n, m in self.net.named_modules()
+                if isinstance(m, nn.Linear) and n.endswith(FFN_TARGETS)
+                and n.startswith("transformer.layers.")
+            ]
+            for name in ffn_names:
+                parent = self.net.get_submodule(name.rsplit(".", 1)[0])
+                setattr(parent, name.split(".")[-1],
+                        LoRALinear(self.net.get_submodule(name), ffn_rank, ffn_alpha))
+            self.n_ffn = len(ffn_names)
 
         # The position bank returns only names it recognises and merely logs the
         # shortfall, which later breaks the forward. Resolve here, identically for
@@ -128,8 +170,10 @@ class RevePerChannel(nn.Module):
         self.used = resolved
         self.register_buffer("keep_idx", torch.tensor(keep), persistent=False)
         self.register_buffer("pos", self.net.get_positions(resolved), persistent=False)
-        self.head = PerElectrodeHead(len(keep), self.net.embed_dim, shrink,
-                                     n_outputs, dropout)
+        self.head = (MQPoolHead(mq_k, self.net.embed_dim, n_outputs, dropout)
+                     if head_kind == "mqpool" else
+                     PerElectrodeHead(len(keep), self.net.embed_dim, shrink,
+                                      n_outputs, dropout))
 
     def adapter_parameters(self):
         return [p for n, p in self.named_parameters() if n.endswith((".A", ".B"))]
@@ -146,10 +190,13 @@ class RevePerChannel(nn.Module):
 
 
 class NameMatched:
-    """Reorders incoming electrodes into the trained order, zero-filling gaps."""
+    """Reorders incoming electrodes into the trained order, zero-filling gaps.
+    Supports either a single model or a list of ensemble members whose L2-normalised
+    embeddings are averaged and re-normalised."""
 
-    def __init__(self, model, channels, in_names, device):
-        self.model, self.device = model, device
+    def __init__(self, models, channels, in_names, device):
+        self.models = models if isinstance(models, list) else [models]
+        self.device = device
         lookup = {n.casefold(): i for i, n in enumerate(in_names)}
         self.src = [lookup.get(c.casefold(), -1) for c in channels]
         missing = [c for c, i in zip(channels, self.src) if i < 0]
@@ -157,18 +204,25 @@ class NameMatched:
             f"[REVE-LoRA] matched {len(channels) - len(missing)}/{len(channels)} "
             f"training channels by name among {len(in_names)} inputs; "
             f"zero-filled: {missing if missing else 'none'}; REVE uses "
-            f"{len(model.used)} with known positions"
+            f"{len(self.models[0].used)} with known positions"
+            + (f" ({len(self.models)} ensemble members)" if len(self.models) > 1 else "")
         )
 
     @torch.no_grad()
     def predict(self, X):
-        self.model.eval()
         X = torch.as_tensor(X, dtype=torch.float32).to(self.device)
         out = torch.zeros(X.shape[0], len(self.src), X.shape[-1], device=self.device)
         for dst, src in enumerate(self.src):
             if src >= 0:
                 out[:, dst] = X[:, src]
-        return self.model(out)
+        if len(self.models) == 1:
+            self.models[0].eval()
+            return self.models[0](out)
+        preds = []
+        for m in self.models:
+            m.eval()
+            preds.append(F.normalize(m(out).float(), dim=-1))
+        return F.normalize(torch.stack(preds).mean(0), dim=-1)
 
 
 class Solver(CompetSolver):
@@ -180,10 +234,37 @@ class Solver(CompetSolver):
     def load_model(self, meta):
         sub = meta["submission_dir"]
         os.environ["REVE_POSITIONS_PATH"] = str(sub)   # bundled; no download at eval
+        in_names = meta.get("ch_names") or [c["ch_name"] for c in meta["chs_info"]]
+        if (sub / "ensemble_config.json").exists():
+            ecfg = json.loads((sub / "ensemble_config.json").read_text())
+            enc_state = torch.load(sub / "encoder.pt", map_location="cpu",
+                                   weights_only=True)
+            models = []
+            for mcfg in ecfg["members"]:
+                m = RevePerChannel(
+                    ecfg["channels"], ecfg["n_outputs"], meta["sfreq"],
+                    rank=mcfg["rank"], alpha=mcfg["alpha"],
+                    shrink=mcfg["shrink"], dropout=mcfg["dropout"],
+                    ffn_rank=mcfg.get("ffn_rank", 0), ffn_alpha=mcfg.get("ffn_alpha", 0),
+                    head_kind=mcfg.get("head_kind", "perelec"), mq_k=mcfg.get("mq_k", 2),
+                    encoder_state=enc_state,
+                )
+                tstate = torch.load(sub / mcfg["file"], map_location=meta["device"],
+                                    weights_only=True)
+                res = m.load_state_dict(tstate, strict=False)
+                absent = [k for k in tstate if k not in m.state_dict()]
+                if res.unexpected_keys or absent:
+                    raise RuntimeError(f"member {mcfg['file']} mismatch: "
+                                       f"{(res.unexpected_keys or absent)[:4]}")
+                models.append(m.to(meta["device"]).eval())
+            return NameMatched(models, ecfg["channels"], in_names, meta["device"])
+
         cfg = json.loads((sub / "reve_config.json").read_text())
         model = RevePerChannel(
             cfg["channels"], cfg["n_outputs"], meta["sfreq"], rank=cfg["rank"],
             alpha=cfg["alpha"], shrink=cfg["shrink"], dropout=cfg["dropout"],
+            ffn_rank=cfg.get("ffn_rank", 0), ffn_alpha=cfg.get("ffn_alpha", 0),
+            head_kind=cfg.get("head_kind", "perelec"), mq_k=cfg.get("mq_k", 2),
         )
         state = torch.load(sub / "weights.pt", map_location=meta["device"],
                            weights_only=True)
@@ -192,5 +273,4 @@ class Solver(CompetSolver):
             raise RuntimeError(f"weights mismatch: missing {missing[:4]}, "
                                f"unexpected {unexpected[:4]}")
         model = model.to(meta["device"]).eval()
-        in_names = meta.get("ch_names") or [c["ch_name"] for c in meta["chs_info"]]
         return NameMatched(model, cfg["channels"], in_names, meta["device"])
