@@ -78,6 +78,14 @@ class LoRALinear(nn.Module):
     def forward(self, x):
         return self.base(x) + F.linear(F.linear(x, self.A), self.B) * self.scale
 
+    @property
+    def weight(self):
+        """Effective weight, W + scale * B A. braindecode >= 2.0 reads `net[1].weight` of the
+        feed-forward GEGLU directly instead of calling the module, which would skip the
+        adapter; with this property the adapter is applied there too. (The input dropout of
+        this adapter does not apply on that path.)"""
+        return self.base.weight + (self.B @ self.A) * self.scale
+
 
 class PerElectrodeHead(nn.Module):
     """Shared shrink per electrode, then separate weights per electrode."""
