@@ -12,11 +12,12 @@ submitted model for every session.
 Input handling repeats the training notebook: electrodes matched to the training ones by
 name (extras ignored, missing ones zero-filled), the window cropped to the first
 `n_times` samples (the notebook's CROP_S), per-window per-channel standardisation, then
-resampling from the harness's 120 Hz to REVE's 200 Hz. The model keeps no state, so
-`reset_state` does nothing. Class probabilities are averaged over members before the
+resampling from the harness's 120 Hz to REVE's 200 Hz. With `input_norm: window` the model
+keeps no state; with `input_norm: session` the windows are scaled by the running power of their own session (causal;
+state cleared by `reset_state`). Class probabilities are averaged over members before the
 argmax.
 
-The model definition matches `track2_02_eegnet.ipynb`; keep the two in step.
+The model definition matches `track2_03_sealed_eval.ipynb`; keep the two in step.
 """
 
 import json
@@ -80,22 +81,33 @@ class LoRALinear(nn.Module):
 
 class PerElectrodeHead(nn.Module):
     """Shrink each electrode's embedding with weights shared across electrodes (one linear
-    layer, or a funnel of several), then a final layer with separate weights per electrode."""
+    layer, or a funnel of several), then a final layer with separate weights per electrode.
+    norm: a LayerNorm after every funnel linear layer, which keeps the signal size steady.
+    init: 'kaiming' gives the funnel layers He starting weights (PyTorch's default shrinks the
+    signal at every layer)."""
 
-    def __init__(self, n_chans, embed_dim, dims, n_outputs, dropout=0.0, mid_dropout=0.0):
+    def __init__(self, n_chans, embed_dim, dims, n_outputs, dropout=0.0, mid_dropout=0.0,
+                 norm=False, init='default'):
         super().__init__()
         dims = [dims] if isinstance(dims, int) else list(dims)
         self.norm = nn.LayerNorm(embed_dim)
-        if len(dims) == 1:
+        if len(dims) == 1 and not norm:
             self.shrink = nn.Linear(embed_dim, dims[0])        # keeps the older key names
         else:
             layers, prev = [], embed_dim
             for i, d in enumerate(dims):
                 layers.append(nn.Linear(prev, d))
                 prev = d
+                if norm:
+                    layers.append(nn.LayerNorm(d))
                 if i < len(dims) - 1:
                     layers += [nn.GELU(), nn.Dropout(mid_dropout)]
             self.shrink = nn.Sequential(*layers)
+        if init == 'kaiming':
+            for m in self.shrink.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+                    nn.init.zeros_(m.bias)
         self.drop = nn.Dropout(dropout)
         self.out = nn.Linear(n_chans * dims[-1], n_outputs)
 
@@ -129,7 +141,7 @@ def is_adapter_key(k):
 class ReveLoRA(nn.Module):
 
     def __init__(self, channels, n_classes, in_sfreq, rank, encoder_state,
-                 ffn_rank=0, ffn_alpha=0, head_kind="mean", shrink=16, mq_k=2, head_dims=None):
+                 ffn_rank=0, ffn_alpha=0, head_kind="mean", shrink=16, mq_k=2, head_dims=None, head_norm=False):
         super().__init__()
         self.head_kind = head_kind
         self.in_sfreq = float(in_sfreq)
@@ -163,7 +175,7 @@ class ReveLoRA(nn.Module):
                         LoRALinear(self.net.get_submodule(name), ffn_rank, ffn_alpha))
         E = self.net.embed_dim
         if head_kind == "perelec":
-            self.head = PerElectrodeHead(len(channels), E, head_dims or shrink, n_classes)
+            self.head = PerElectrodeHead(len(channels), E, head_dims or shrink, n_classes, norm=head_norm)
         elif head_kind == "mqpool":
             self.head = MQPoolHead(mq_k, E, n_classes)
         else:
@@ -190,8 +202,11 @@ class NameMatchedEnsemble:
     """Reorders incoming electrodes into the trained order, zero-filling gaps, and
     averages the members' class probabilities."""
 
-    def __init__(self, members, channels, in_names, n_times, device):
+    def __init__(self, members, channels, in_names, n_times, device,
+                 input_norm="window", prior_var=None, n0=5.0):
         self.members, self.device, self.n_times = members, device, int(n_times)
+        self.input_norm, self.n0 = input_norm, float(n0)
+        self.prior_var = None if prior_var is None else torch.as_tensor(prior_var, dtype=torch.float64)
         lookup = {n.casefold(): i for i, n in enumerate(in_names)}
         self.src = [lookup.get(c.casefold(), -1) for c in channels]
         missing = [c for c, i in zip(channels, self.src) if i < 0]
@@ -205,9 +220,26 @@ class NameMatchedEnsemble:
             raise RuntimeError(
                 f"no training channel found in the input: {list(in_names)[:8]}"
             )
+        self.reset_state()
 
     def reset_state(self):
-        pass                                       # stateless
+        # Only the session-scaled model has state: the summed power of the windows seen so far.
+        self.var_sum = torch.zeros(len(self.src), dtype=torch.float64)
+        self.count = 0
+
+    def _session_scale(self, out):
+        """Causal per-session scaling (same as `session_norm` in the training notebook): remove each window's
+        mean, divide each electrode by the root of the mean power of the EARLIER windows of the session
+        (blended with a prior of n0 windows), then add this window's power to the running sum."""
+        scaled = []
+        for i in range(out.shape[0]):
+            x = out[i].double().cpu()
+            x = x - x.mean(-1, keepdim=True)
+            scale = torch.sqrt((self.n0 * self.prior_var + self.var_sum) / (self.n0 + self.count))
+            scaled.append((x / scale[:, None]).float())
+            self.var_sum = self.var_sum + x.var(-1, unbiased=False)
+            self.count += 1
+        return torch.stack(scaled).to(out.device)
 
     @torch.no_grad()
     def predict(self, X):
@@ -220,7 +252,7 @@ class NameMatchedEnsemble:
             out = out[..., : self.n_times]
         elif out.shape[-1] < self.n_times:
             out = F.pad(out, (0, self.n_times - out.shape[-1]))
-        out = standardize(out)
+        out = self._session_scale(out) if self.input_norm == "session" else standardize(out)
         probs = torch.stack([m(out).softmax(-1) for m in self.members]).mean(0)
         return probs.argmax(-1)
 
@@ -249,7 +281,7 @@ class Solver(CompetSolver):
                          ffn_rank=cfg.get("ffn_rank", 0), ffn_alpha=cfg.get("ffn_alpha", 0),
                          head_kind=cfg.get("head_kind", "mean"),
                          shrink=cfg.get("head_shrink", 16), mq_k=cfg.get("mq_k", 2),
-                         head_dims=cfg.get("head_dims"))
+                         head_dims=cfg.get("head_dims"), head_norm=cfg.get("head_norm", False))
             state = torch.load(sub / fname, map_location="cpu", weights_only=True)
             res = m.load_state_dict(state, strict=False)
             absent = [k for k in res.missing_keys if is_adapter_key(k)]
@@ -261,4 +293,6 @@ class Solver(CompetSolver):
             members.append(m)
         members = [m.to(meta["device"]).eval() for m in members]
         return NameMatchedEnsemble(members, cfg["channels"], in_names,
-                                   cfg["n_times"], meta["device"])
+                                   cfg["n_times"], meta["device"],
+                                   input_norm=cfg.get("input_norm", "window"),
+                                   prior_var=cfg.get("prior_var"), n0=cfg.get("n0", 5.0))
