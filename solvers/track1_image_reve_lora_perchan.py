@@ -7,7 +7,8 @@ feed-forward matrices in each block (`transformer.layers.*.1.net.{1,3}`), so no
 pretrained weight is overwritten.
 
 The head gives every electrode its own weights (the default, `head_kind="perelec"`), or
-pools the channel tokens with K learned queries (`head_kind="mqpool"`), which keeps a
+pools the channel tokens with K learned queries (`head_kind="mqpool"`), or applies one shared
+funnel to every electrode and averages (`head_kind="funnelpool"`, order-free), which keeps a
 fixed K x embed_dim bottleneck at any channel count. Averaging electrodes together, or
 applying one shared map to each, both lost the signal on this task, and each electrode
 needing its own mapping was the consistent finding. Each electrode's 512-d token is
@@ -124,6 +125,23 @@ class MQPoolHead(nn.Module):
         return self.out(self.drop(F.gelu(pooled.flatten(1))))
 
 
+class FunnelPoolHead(nn.Module):
+    """Order-free head: one shared funnel per electrode token (embed -> shrink), a mean
+    over electrodes, then one linear map to the target. No weight belongs to a particular
+    electrode, so shuffling the electrodes cannot change the output."""
+
+    def __init__(self, embed_dim, shrink, n_outputs, dropout):
+        super().__init__()
+        self.norm = nn.LayerNorm(embed_dim)
+        self.shrink = nn.Linear(embed_dim, shrink)
+        self.drop = nn.Dropout(dropout)
+        self.out = nn.Linear(shrink, n_outputs)
+
+    def forward(self, tokens):                    # (B, chan, embed)
+        z = self.drop(F.gelu(self.shrink(self.norm(tokens))))
+        return self.out(z.mean(dim=1))
+
+
 class RevePerChannel(nn.Module):
 
     def __init__(self, channels, n_outputs, in_sfreq, rank=8, alpha=16, shrink=32,
@@ -178,7 +196,9 @@ class RevePerChannel(nn.Module):
         self.used = resolved
         self.register_buffer("keep_idx", torch.tensor(keep), persistent=False)
         self.register_buffer("pos", self.net.get_positions(resolved), persistent=False)
-        self.head = (MQPoolHead(mq_k, self.net.embed_dim, n_outputs, dropout)
+        self.head = (FunnelPoolHead(self.net.embed_dim, shrink, n_outputs, dropout)
+                     if head_kind == "funnelpool" else
+                     MQPoolHead(mq_k, self.net.embed_dim, n_outputs, dropout)
                      if head_kind == "mqpool" else
                      PerElectrodeHead(len(keep), self.net.embed_dim, shrink,
                                       n_outputs, dropout))
